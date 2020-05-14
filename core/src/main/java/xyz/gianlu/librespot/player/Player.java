@@ -738,6 +738,9 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
         File outputPipe();
 
         @Nullable
+        String gstreamerSink();
+
+        @Nullable
         File metadataPipe();
 
         boolean preloadEnabled();

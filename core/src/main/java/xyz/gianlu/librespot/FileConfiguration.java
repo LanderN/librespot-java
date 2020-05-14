@@ -235,6 +235,13 @@ public final class FileConfiguration extends AbsConfiguration {
     }
 
     @Override
+    public @Nullable String gstreamerSink() {
+        String pipeline = config.get("player.gstreamer");
+        if (pipeline == null || pipeline.isEmpty()) return "autoaudiosink";
+        return pipeline;
+    }
+
+    @Override
     public @Nullable File metadataPipe() {
         String path = config.get("player.metadataPipe");
         if (path == null || path.isEmpty()) return null;

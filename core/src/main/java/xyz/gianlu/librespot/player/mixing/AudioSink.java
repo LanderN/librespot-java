@@ -2,6 +2,10 @@ package xyz.gianlu.librespot.player.mixing;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.freedesktop.gstreamer.Gst;
+import org.freedesktop.gstreamer.Pipeline;
+import org.freedesktop.gstreamer.elements.AppSrc;
+import org.freedesktop.gstreamer.Buffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import xyz.gianlu.librespot.player.Player;
@@ -12,6 +16,7 @@ import javax.sound.sampled.FloatControl;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 import java.io.*;
+import java.nio.ByteBuffer;
 
 /**
  * @author devgianlu
@@ -34,17 +39,20 @@ public final class AudioSink implements Runnable, Closeable {
         this.listener = listener;
         switch (conf.output()) {
             case MIXER:
-                output = new Output(Output.Type.MIXER, mixing, conf, null, null);
+                output = new Output(Output.Type.MIXER, mixing, conf, null, null, null);
                 break;
             case PIPE:
                 File pipe = conf.outputPipe();
                 if (pipe == null || !pipe.exists() || !pipe.canWrite())
                     throw new IllegalArgumentException("Invalid pipe file: " + pipe);
 
-                output = new Output(Output.Type.PIPE, mixing, conf, pipe, null);
+                output = new Output(Output.Type.PIPE, mixing, conf, pipe, null, null);
                 break;
             case STDOUT:
-                output = new Output(Output.Type.STREAM, mixing, conf, null, System.out);
+                output = new Output(Output.Type.STREAM, mixing, conf, null, System.out, null);
+                break;
+            case GSTREAMER:
+                output = new Output(Output.Type.GSTREAMER, mixing, conf, null, null, conf.gstreamerSink());
                 break;
             default:
                 throw new IllegalArgumentException("Unknown output: " + conf.output());
@@ -177,9 +185,11 @@ public final class AudioSink implements Runnable, Closeable {
         private final Type type;
         private SourceDataLine line;
         private OutputStream out;
+        private Pipeline pipeline;
+        private AppSrc pipelineSrc;
         private int lastVolume = -1;
 
-        Output(@NotNull Type type, @NotNull MixingLine mixing, @NotNull Player.Configuration conf, @Nullable File pipe, @Nullable OutputStream out) {
+        Output(@NotNull Type type, @NotNull MixingLine mixing, @NotNull Player.Configuration conf, @Nullable File pipe, @Nullable OutputStream out, @Nullable String gstSink) {
             this.conf = conf;
             this.mixing = mixing;
             this.type = type;
@@ -191,6 +201,21 @@ public final class AudioSink implements Runnable, Closeable {
 
             if (type == Type.STREAM && out == null)
                 throw new IllegalArgumentException("Output stream cannot be null!");
+
+            if (type == Type.GSTREAMER) {
+                Gst.init();
+
+                String pipelineSpec = "audiotestsrc wave=silence is-live=true !" +
+                    "audiomixer name=mix !" +
+                    gstSink +
+                    " appsrc name=app-src block=true !" +
+                    "rawaudioparse use-sink-caps=false format=pcm pcm-format=s16le sample-rate=44100 num-channels=2 ! mix.";
+
+                pipeline = (Pipeline)Gst.parseLaunch(pipelineSpec);
+
+                pipelineSrc = (AppSrc)pipeline.getElementByName("app-src");
+                pipeline.play();
+            }
         }
 
         private static float calcLogarithmic(int val) {
@@ -249,6 +274,12 @@ public final class AudioSink implements Runnable, Closeable {
                 out.write(buffer, 0, len);
             } else if (type == Type.STREAM) {
                 out.write(buffer, 0, len);
+            } else if (type == Type.GSTREAMER) {
+                ByteBuffer bb = ByteBuffer.wrap(buffer);
+                Buffer buf;
+                buf = new Buffer(bb.remaining());
+                buf.map(true).put(bb);
+                pipelineSrc.pushBuffer(buf);
             } else {
                 throw new IllegalStateException();
             }
@@ -266,6 +297,8 @@ public final class AudioSink implements Runnable, Closeable {
             }
 
             if (out != null) out.close();
+
+            if (pipeline != null) pipeline.close();
         }
 
         @NotNull
@@ -299,7 +332,7 @@ public final class AudioSink implements Runnable, Closeable {
         }
 
         enum Type {
-            MIXER, PIPE, STREAM
+            MIXER, PIPE, STREAM, GSTREAMER
         }
     }
 }
