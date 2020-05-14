@@ -113,6 +113,7 @@ public final class Session implements Closeable, SubListener {
     private EventService eventService;
     private String countryCode = null;
     private volatile boolean closed = false;
+    private volatile boolean closing = false;
     private volatile ScheduledFuture<?> scheduledReconnect = null;
 
     private Session(Inner inner, String addr) throws IOException {
@@ -347,10 +348,10 @@ public final class Session implements Closeable, SubListener {
             authLock.notifyAll();
         }
 
-        dealer.connect();
-        player.initState();
-        TimeProvider.init(this);
         eventService.language(conf().preferredLocale());
+        TimeProvider.init(this);
+        player.initState();
+        dealer.connect();
 
         LOGGER.info("Authenticated as {}!", apWelcome.getCanonicalUsername());
         mercuryClient.interestedIn("spotify:user:attributes:update", this);
@@ -428,6 +429,9 @@ public final class Session implements Closeable, SubListener {
     @Override
     public void close() throws IOException {
         LOGGER.info("Closing session. {deviceId: {}}", inner.deviceId);
+
+        closing = true;
+
         scheduler.shutdownNow();
 
         if (player != null) {
@@ -486,6 +490,8 @@ public final class Session implements Closeable, SubListener {
             }
         }
 
+        reconnectionListeners.clear();
+
         LOGGER.info("Closed session. {deviceId: {}} ", inner.deviceId);
     }
 
@@ -494,6 +500,11 @@ public final class Session implements Closeable, SubListener {
     }
 
     private void waitAuthLock() {
+        if (closing && conn == null) {
+            LOGGER.debug("Connection was broken while Session.close() has been called");
+            return;
+        }
+
         if (closed) throw new IllegalStateException("Session is closed!");
 
         synchronized (authLock) {
@@ -508,6 +519,11 @@ public final class Session implements Closeable, SubListener {
     }
 
     public void send(Packet.Type cmd, byte[] payload) throws IOException {
+        if (closing && conn == null) {
+            LOGGER.debug("Connection was broken while Session.close() has been called");
+            return;
+        }
+
         if (closed) throw new IllegalStateException("Session is closed!");
 
         synchronized (authLock) {
@@ -631,7 +647,7 @@ public final class Session implements Closeable, SubListener {
     }
 
     public boolean reconnecting() {
-        return !closed && conn == null;
+        return !closing && !closed && conn == null;
     }
 
     @NotNull
@@ -711,6 +727,10 @@ public final class Session implements Closeable, SubListener {
 
     public void addReconnectionListener(@NotNull ReconnectionListener listener) {
         if (!reconnectionListeners.contains(listener)) reconnectionListeners.add(listener);
+    }
+
+    public void removeReconnectionListener(@NotNull ReconnectionListener listener) {
+        reconnectionListeners.remove(listener);
     }
 
     private void parseProductInfo(@NotNull InputStream in) throws IOException, SAXException, ParserConfigurationException {
@@ -932,12 +952,14 @@ public final class Session implements Closeable, SubListener {
             if (authConf.storeCredentials()) {
                 File storeFile = authConf.credentialsFile();
                 if (storeFile != null && storeFile.exists()) {
-                    JsonObject obj = JsonParser.parseReader(new FileReader(storeFile)).getAsJsonObject();
-                    loginCredentials = Authentication.LoginCredentials.newBuilder()
-                            .setTyp(Authentication.AuthenticationType.valueOf(obj.get("type").getAsString()))
-                            .setUsername(obj.get("username").getAsString())
-                            .setAuthData(Utils.fromBase64(obj.get("credentials").getAsString()))
-                            .build();
+                    try (FileReader reader = new FileReader(storeFile)) {
+                        JsonObject obj = JsonParser.parseReader(reader).getAsJsonObject();
+                        loginCredentials = Authentication.LoginCredentials.newBuilder()
+                                .setTyp(Authentication.AuthenticationType.valueOf(obj.get("type").getAsString()))
+                                .setUsername(obj.get("username").getAsString())
+                                .setAuthData(Utils.fromBase64(obj.get("credentials").getAsString()))
+                                .build();
+                    }
                 }
             }
 

@@ -24,7 +24,7 @@ public final class PlayerHandler extends AbsSessionHandler {
         super(wrapper);
     }
 
-    private void setVolume(HttpServerExchange exchange, Session session, @Nullable String valStr) {
+    private static void setVolume(HttpServerExchange exchange, @NotNull Session session, @Nullable String valStr) {
         if (valStr == null) {
             Utils.invalidParameter(exchange, "volume");
             return;
@@ -46,7 +46,7 @@ public final class PlayerHandler extends AbsSessionHandler {
         session.player().setVolume(val);
     }
 
-    private void load(HttpServerExchange exchange, Session session, @Nullable String uri, boolean play) {
+    private static void load(HttpServerExchange exchange, @NotNull Session session, @Nullable String uri, boolean play) {
         if (uri == null) {
             Utils.invalidParameter(exchange, "uri");
             return;
@@ -55,7 +55,7 @@ public final class PlayerHandler extends AbsSessionHandler {
         session.player().load(uri, play);
     }
 
-    private void current(HttpServerExchange exchange, Session session) {
+    private static void current(HttpServerExchange exchange, @NotNull Session session) {
         PlayableId id;
         try {
             id = session.player().currentPlayable();
@@ -90,6 +90,56 @@ public final class PlayerHandler extends AbsSessionHandler {
         }
 
         exchange.getResponseSender().send(obj.toString());
+    }
+
+    private static void tracks(HttpServerExchange exchange, @NotNull Session session, boolean withQueue) {
+        Player.Tracks tracks = session.player().tracks(withQueue);
+
+        JsonObject obj = new JsonObject();
+        obj.add("current", tracks.current == null ? null : ProtobufToJson.convert(tracks.current));
+        obj.add("next", ProtobufToJson.convertList(tracks.next));
+        obj.add("prev", ProtobufToJson.convertList(tracks.previous));
+        exchange.getResponseSender().send(obj.toString());
+    }
+
+    private static void addToQueue(HttpServerExchange exchange, @NotNull Session session, String uri) {
+        if (uri == null) {
+            Utils.invalidParameter(exchange, "uri");
+            return;
+        }
+
+        session.player().addToQueue(uri);
+    }
+
+    private static void removeFromQueue(HttpServerExchange exchange, @NotNull Session session, String uri) {
+        if (uri == null) {
+            Utils.invalidParameter(exchange, "uri");
+            return;
+        }
+
+        session.player().removeFromQueue(uri);
+    }
+
+    private static void seek(HttpServerExchange exchange, @NotNull Session session, @Nullable String valStr) {
+        if (valStr == null) {
+            Utils.invalidParameter(exchange, "pos");
+            return;
+        }
+
+        int pos;
+        try {
+            pos = Integer.parseInt(valStr);
+        } catch (Exception ex) {
+            Utils.invalidParameter(exchange, "pos", "Not an integer");
+            return;
+        }
+
+        if (pos < 0) {
+            Utils.invalidParameter(exchange, "pos", "Cannot be negative");
+            return;
+        }
+
+        session.player().seek(pos);
     }
 
     @Override
@@ -141,15 +191,28 @@ public final class PlayerHandler extends AbsSessionHandler {
             case NEXT:
                 session.player().next();
                 return;
+            case SEEK:
+                seek(exchange, session, Utils.getFirstString(params, "pos"));
+                return;
+            case TRACKS:
+                tracks(exchange, session, Utils.getFirstBoolean(params, "withQueue"));
+                return;
+            case ADD_TO_QUEUE:
+                addToQueue(exchange, session, Utils.getFirstString(params, "uri"));
+                break;
+            case REMOVE_FROM_QUEUE:
+                removeFromQueue(exchange, session, Utils.getFirstString(params, "uri"));
+                break;
             default:
                 throw new IllegalArgumentException(cmd.name());
         }
     }
 
     private enum Command {
-        LOAD("load"), PAUSE("pause"), RESUME("resume"),
-        NEXT("next"), PREV("prev"), SET_VOLUME("set-volume"),
-        VOLUME_UP("volume-up"), VOLUME_DOWN("volume-down"), CURRENT("current");
+        LOAD("load"), PAUSE("pause"), RESUME("resume"), TRACKS("tracks"),
+        NEXT("next"), PREV("prev"), SET_VOLUME("set-volume"), SEEK("seek"),
+        VOLUME_UP("volume-up"), VOLUME_DOWN("volume-down"), CURRENT("current"),
+        ADD_TO_QUEUE("addToQueue"), REMOVE_FROM_QUEUE("removeFromQueue");
 
         private final String name;
 

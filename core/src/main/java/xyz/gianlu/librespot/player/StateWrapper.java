@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.protobuf.ByteString;
 import com.google.protobuf.TextFormat;
 import com.spotify.connectstate.Connect;
 import com.spotify.connectstate.Player.*;
@@ -581,21 +582,29 @@ public class StateWrapper implements DeviceStateHandler.Listener, DealerClient.M
         tracksKeeper.addToQueue(track);
     }
 
+    synchronized void removeFromQueue(@NotNull String uri) {
+        tracksKeeper.removeFromQueue(uri);
+    }
+
     synchronized void setQueue(@Nullable List<ContextTrack> prevTracks, @Nullable List<ContextTrack> nextTracks) {
         tracksKeeper.setQueue(prevTracks, nextTracks);
     }
 
     @NotNull
-    Map<String, String> metadataFor(@NotNull PlayableId id) throws IllegalArgumentException {
-        if (tracksKeeper == null) throw new IllegalStateException();
+    Optional<Map<String, String>> metadataFor(@NotNull PlayableId id) {
+        if (tracksKeeper == null) return Optional.empty();
 
-        int index = ProtoUtils.indexOfTrackByUri(tracksKeeper.tracks, id.toSpotifyUri());
+        ContextTrack current = getCurrentTrack();
+        if (current != null && id.matches(current))
+            return Optional.of(current.getMetadataMap());
+
+        int index = PlayableId.indexOfTrack(tracksKeeper.tracks, id);
         if (index == -1) {
-            index = ProtoUtils.indexOfTrackByUri(tracksKeeper.queue, id.toSpotifyUri());
-            if (index == -1) throw new IllegalArgumentException(id.toString());
+            index = PlayableId.indexOfTrack(tracksKeeper.queue, id);
+            if (index == -1) return Optional.empty();
         }
 
-        return tracksKeeper.tracks.get(index).getMetadataMap();
+        return Optional.of(tracksKeeper.tracks.get(index).getMetadataMap());
     }
 
     /**
@@ -753,6 +762,38 @@ public class StateWrapper implements DeviceStateHandler.Listener, DealerClient.M
     public void setContextMetadata(@NotNull String key, @Nullable String value) {
         if (value == null) state.removeContextMetadata(key);
         else state.putContextMetadata(key, value);
+    }
+
+    @NotNull
+    public List<ContextTrack> getNextTracks(boolean withQueue) {
+        if (tracksKeeper == null) return Collections.emptyList();
+
+        int index = tracksKeeper.getCurrentTrackIndex();
+        int size = tracksKeeper.tracks.size();
+        List<ContextTrack> list = new ArrayList<>(size - index);
+        for (int i = index + 1; i < size; i++)
+            list.add(tracksKeeper.tracks.get(i));
+
+        if (withQueue) list.addAll(0, tracksKeeper.queue);
+
+        return list;
+    }
+
+    @Nullable
+    public ContextTrack getCurrentTrack() {
+        return tracksKeeper == null ? null : tracksKeeper.tracks.get(tracksKeeper.getCurrentTrackIndex());
+    }
+
+    @NotNull
+    public List<ContextTrack> getPrevTracks() {
+        if (tracksKeeper == null) return Collections.emptyList();
+
+        int index = tracksKeeper.getCurrentTrackIndex();
+        List<ContextTrack> list = new ArrayList<>(index);
+        for (int i = 0; i < index; i++)
+            list.add(tracksKeeper.tracks.get(i));
+
+        return list;
     }
 
     @NotNull
@@ -942,6 +983,15 @@ public class StateWrapper implements DeviceStateHandler.Listener, DealerClient.M
             queue.add(track.toBuilder().putMetadata("is_queued", "true").build());
             updatePrevNextTracks();
             updateTrackCount();
+        }
+
+        synchronized void removeFromQueue(@NotNull String uri) {
+            ByteString gid = ByteString.copyFrom(PlayableId.fromUri(uri).getGid());
+
+            if (queue.removeIf(track -> (track.hasUri() && uri.equals(track.getUri())) || (track.hasGid() && gid.equals(track.getGid())))) {
+                updateTrackCount();
+                updatePrevNextTracks();
+            }
         }
 
         synchronized void setQueue(@Nullable List<ContextTrack> prevTracks, @Nullable List<ContextTrack> nextTracks) {
@@ -1259,7 +1309,7 @@ public class StateWrapper implements DeviceStateHandler.Listener, DealerClient.M
 
                 PlayableId currentlyPlaying = getCurrentPlayableOrThrow();
                 shuffle.shuffle(tracks, true);
-                shuffleKeepIndex = ProtoUtils.indexOfTrackByUri(tracks, currentlyPlaying.toSpotifyUri());
+                shuffleKeepIndex = PlayableId.indexOfTrack(tracks, currentlyPlaying);
                 Collections.swap(tracks, 0, shuffleKeepIndex);
                 setCurrentTrackIndex(0);
 
@@ -1270,7 +1320,7 @@ public class StateWrapper implements DeviceStateHandler.Listener, DealerClient.M
                     if (shuffleKeepIndex != -1) Collections.swap(tracks, 0, shuffleKeepIndex);
 
                     shuffle.unshuffle(tracks);
-                    setCurrentTrackIndex(ProtoUtils.indexOfTrackByUri(tracks, currentlyPlaying.toSpotifyUri()));
+                    setCurrentTrackIndex(PlayableId.indexOfTrack(tracks, currentlyPlaying));
 
                     LOGGER.trace("Unshuffled using Fisher-Yates.");
                 } else {
@@ -1280,7 +1330,7 @@ public class StateWrapper implements DeviceStateHandler.Listener, DealerClient.M
                     pages = PagesLoader.from(session, context.uri());
                     loadAllTracks();
 
-                    setCurrentTrackIndex(ProtoUtils.indexOfTrackByUri(tracks, id.toSpotifyUri()));
+                    setCurrentTrackIndex(PlayableId.indexOfTrack(tracks, id));
                     LOGGER.trace("Unshuffled by reloading context.");
                 }
             }

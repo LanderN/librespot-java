@@ -28,9 +28,11 @@ import xyz.gianlu.librespot.player.codecs.Codec;
 import xyz.gianlu.librespot.player.contexts.AbsSpotifyContext;
 import xyz.gianlu.librespot.player.feeders.AbsChunkedInputStream;
 import xyz.gianlu.librespot.player.mixing.AudioSink;
+import xyz.gianlu.librespot.player.mixing.LineHelper;
 import xyz.gianlu.librespot.player.playback.PlayerMetrics;
 import xyz.gianlu.librespot.player.playback.PlayerSession;
 
+import javax.sound.sampled.LineUnavailableException;
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -120,6 +122,10 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
         handleSkipPrev();
     }
 
+    public void seek(int pos) {
+        handleSeek(pos);
+    }
+
     public void load(@NotNull String uri, boolean play) {
         try {
             String sessionId = state.loadContext(uri);
@@ -133,6 +139,16 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
             LOGGER.fatal("Cannot play local tracks!", ex);
             panicState(null);
         }
+    }
+
+    public void addToQueue(@NotNull String uri) {
+        state.addToQueue(ContextTrack.newBuilder().setUri(uri).build());
+        state.updated();
+    }
+
+    public void removeFromQueue(@NotNull String uri) {
+        state.removeFromQueue(uri);
+        state.updated();
     }
 
 
@@ -526,7 +542,12 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
 
     @Override
     public void sinkError(@NotNull Exception ex) {
-        LOGGER.fatal("Sink error!", ex);
+        if (ex instanceof LineHelper.MixerException || ex instanceof LineUnavailableException) {
+            LOGGER.fatal("An error with the mixer occurred. This is likely a configuration issue, please consult the project repository.", ex);
+        } else {
+            LOGGER.fatal("Sink error!", ex);
+        }
+
         panicState(PlaybackMetrics.Reason.TRACK_ERROR);
     }
 
@@ -558,6 +579,7 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
         state.updated();
 
         events.trackChanged();
+        events.metadataAvailable();
 
         session.eventService().newPlaybackId(state, playbackId);
         startMetrics(playbackId, startedReason, pos);
@@ -596,7 +618,15 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
      * @return Whether the player is active
      */
     public boolean isActive() {
-        return state.isActive();
+        return state != null && state.isActive();
+    }
+
+    /**
+     * @return A {@link Tracks} instance with the current player queue
+     */
+    @NotNull
+    public Tracks tracks(boolean withQueue) {
+        return new Tracks(state.getPrevTracks(), state.getCurrentTrack(), state.getNextTracks(withQueue));
     }
 
     /**
@@ -622,7 +652,9 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
             PlayableId id = state.getCurrentPlayable();
             if (id == null) return null;
 
-            Map<String, String> map = state.metadataFor(id);
+            Map<String, String> map = state.metadataFor(id).orElse(null);
+            if (map == null) return null;
+
             for (String key : ImageId.IMAGE_SIZES_URLS) {
                 if (map.containsKey(key)) {
                     image = ImageId.fromUri(map.get(key));
@@ -692,7 +724,7 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
      * @return A map containing the metadata associated with this content
      */
     @Override
-    public @NotNull Map<String, String> metadataFor(@NotNull PlayableId playable) {
+    public @NotNull Optional<Map<String, String>> metadataFor(@NotNull PlayableId playable) {
         return state.metadataFor(playable);
     }
 
@@ -714,8 +746,10 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
 
     @Override
     public void close() {
-        if (playerSession != null)
+        if (playerSession != null) {
             endMetrics(playerSession.currentPlaybackId(), PlaybackMetrics.Reason.LOGOUT, playerSession.currentMetrics(), state.getPosition());
+            playerSession.close();
+        }
 
         state.close();
         events.listeners.clear();
@@ -785,6 +819,21 @@ public class Player implements Closeable, DeviceStateHandler.Listener, PlayerSes
         void onInactiveSession(boolean timeout);
 
         void onVolumeChanged(@Range(from = 0, to = 1) float volume);
+    }
+
+    /**
+     * A simple object holding some {@link ContextTrack}s related to the current player state.
+     */
+    public static class Tracks {
+        public final List<ContextTrack> previous;
+        public final ContextTrack current;
+        public final List<ContextTrack> next;
+
+        public Tracks(@NotNull List<ContextTrack> previous, @Nullable ContextTrack current, @NotNull List<ContextTrack> next) {
+            this.previous = previous;
+            this.current = current;
+            this.next = next;
+        }
     }
 
     /**

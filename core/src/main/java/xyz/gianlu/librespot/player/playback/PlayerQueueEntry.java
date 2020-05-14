@@ -29,9 +29,7 @@ import javax.sound.sampled.AudioFormat;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.util.Comparator;
-import java.util.Map;
-import java.util.TreeMap;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -101,7 +99,7 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
                     Utils.artistsToString(stream.track.getArtistList()), playable.toSpotifyUri(), playbackId);
         }
 
-        crossfade = new CrossfadeController(playbackId, metadata.duration(), listener.metadataFor(playable), session.conf());
+        crossfade = new CrossfadeController(playbackId, metadata.duration(), listener.metadataFor(playable).orElse(Collections.emptyMap()), session.conf());
         if (crossfade.hasAnyFadeOut() || session.conf().preloadEnabled())
             notifyInstant(INSTANT_PRELOAD, (int) (crossfade.fadeOutStartTimeMin() - TimeUnit.SECONDS.toMillis(20)));
 
@@ -246,7 +244,7 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
         } catch (IOException | ContentRestrictedException | CdnManager.CdnException | MercuryClient.MercuryException | Codec.CodecException ex) {
             close();
             listener.loadingError(this, ex, retried);
-            LOGGER.trace("%{} terminated at loading.", this, ex);
+            LOGGER.trace("{} terminated at loading.", this, ex);
             return;
         }
 
@@ -438,6 +436,6 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
          * @return A map containing all the metadata related
          */
         @NotNull
-        Map<String, String> metadataFor(@NotNull PlayableId playable);
+        Optional<Map<String, String>> metadataFor(@NotNull PlayableId playable);
     }
 }
