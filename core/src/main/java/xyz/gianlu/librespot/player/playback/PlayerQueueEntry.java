@@ -172,7 +172,7 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
      */
     void seek(int pos) {
         seekTime = pos;
-        if (output != null) output.stream().emptyBuffer();
+        if (output != null) output.emptyBuffer();
     }
 
     /**
@@ -181,7 +181,7 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
      * @throws IllegalStateException If the output is already set. Will also clear {@param output}.
      */
     void setOutput(@NotNull MixingLine.MixingOutput output) {
-        if (closed || this.output != null) {
+        if (closed || hasOutput()) {
             output.clear();
             throw new IllegalStateException("Cannot set output for " + this);
         }
@@ -190,8 +190,6 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
             this.output = output;
             playbackLock.notifyAll();
         }
-
-        this.output.toggle(true);
     }
 
     /**
@@ -211,6 +209,13 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
         synchronized (playbackLock) {
             playbackLock.notifyAll();
         }
+    }
+
+    /**
+     * @return Whether the entry is associated with an output.
+     */
+    public boolean hasOutput() {
+        return output != null;
     }
 
     /**
@@ -270,6 +275,7 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
             }
 
             if (closed) break;
+            output.toggle(true);
 
             if (seekTime != -1) {
                 codec.seek(seekTime);
@@ -290,7 +296,7 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
             }
 
             try {
-                if (codec.writeSomeTo(output.stream()) == -1) {
+                if (codec.writeSomeTo(output) == -1) {
                     try {
                         int time = codec.time();
                         LOGGER.debug("Player time offset is {}. {id: {}}", metadata.duration() - time, playbackId);
@@ -311,6 +317,7 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
             }
         }
 
+        if (output != null) output.toggle(false);
         listener.playbackEnded(this);
         LOGGER.trace("{} terminated.", this);
     }
@@ -330,7 +337,7 @@ class PlayerQueueEntry extends PlayerQueue.Entry implements Closeable, Runnable,
      * @return Whether it has been closed
      */
     boolean closeIfUseless() {
-        if (output == null) {
+        if (!hasOutput()) {
             close();
             return true;
         }

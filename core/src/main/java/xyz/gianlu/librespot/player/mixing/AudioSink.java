@@ -152,10 +152,10 @@ public final class AudioSink implements Runnable, Closeable {
                     }
                 }
             } else {
-                if (!started)
-                    started = output.start();
-
                 try {
+                    if (!started)
+                        started = output.start();
+
                     int count = mixing.read(buffer);
                     output.write(buffer, count);
                 } catch (IOException | LineUnavailableException | LineHelper.MixerException ex) {
@@ -239,8 +239,9 @@ public final class AudioSink implements Runnable, Closeable {
             if (line != null) line.stop();
         }
 
-        boolean start() {
-            if (line != null) {
+        boolean start() throws LineUnavailableException {
+            if (type == Type.MIXER) {
+                acquireLine();
                 line.start();
                 return true;
             }
@@ -248,12 +249,14 @@ public final class AudioSink implements Runnable, Closeable {
             return false;
         }
 
-        void write(byte[] buffer, int len) throws IOException, LineUnavailableException, LineHelper.MixerException {
+        void write(byte[] buffer, int len) throws IOException, LineHelper.MixerException {
             if (type == Type.MIXER) {
-                acquireLine();
-                line.write(buffer, 0, len);
+                if (line != null) line.write(buffer, 0, len);
             } else if (type == Type.PIPE) {
                 if (out == null) {
+                    if (pipe == null)
+                        throw new IllegalStateException();
+
                     if (!pipe.exists()) {
                         try {
                             Process p = new ProcessBuilder().command("mkfifo " + pipe.getAbsolutePath())
@@ -296,7 +299,7 @@ public final class AudioSink implements Runnable, Closeable {
                 line = null;
             }
 
-            if (out != null) out.close();
+            if (out != null && out != System.out) out.close();
 
             if (pipeline != null) pipeline.close();
         }
