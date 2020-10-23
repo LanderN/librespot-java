@@ -1,4 +1,4 @@
-# librespot-api
+# API
 [![Maven Central](https://maven-badges.herokuapp.com/maven-central/xyz.gianlu.librespot/librespot-api/badge.svg)](https://maven-badges.herokuapp.com/maven-central/xyz.gianlu.librespot/librespot-api)
 
 This module depends on `librespot-core` and provides an API to interact with the Spotify client.
@@ -11,6 +11,7 @@ All the endpoints will respond with `200` if successful or:
 
 ### Player
 - `POST /player/load` Load a track from a given URI. The request body should contain two parameters: `uri` and `play`.
+- `POST /player/play-pause` Toggle play/pause status. Useful when using a remote.
 - `POST /player/pause` Pause playback.
 - `POST /player/resume` Resume playback.
 - `POST /player/next` Skip to next track.
@@ -33,6 +34,10 @@ All the endpoints will respond with `200` if successful or:
 
 ### Tokens
 - `POST /token/{scope}` Request an access token for a specific scope (or a comma separated list of scopes).
+
+### Profile
+- `GET /profile/{user_id}/followers` Retrieve a list of profiles that are followers of the specified user
+- `GET /profile/{user_id}/following` Retrieve a list of profiles that the specified user is following
 
 ### Events
 You can subscribe for players events by creating a WebSocket connection to `/events`.
